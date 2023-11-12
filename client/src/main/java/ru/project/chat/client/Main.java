@@ -1,4 +1,4 @@
-package ru.java.chat.server;
+package ru.project.chat.client;
 
 
 public class Main {
