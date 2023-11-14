@@ -3,6 +3,8 @@ CREATE TABLE public."user"(
     login VARCHAR(50) NOT NULL UNIQUE,
 	"password" VARCHAR (30) NOT NULL,
 	nickname VARCHAR (50) NOT NULL UNIQUE,
+    start_ban_date_time TIMESTAMP DEFAULT NULL,
+    end_ban_date_time TIMESTAMP DEFAULT NULL,
     CONSTRAINT user_pk PRIMARY KEY (id)
 );
 

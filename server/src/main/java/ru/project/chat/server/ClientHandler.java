@@ -4,8 +4,13 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static ru.project.chat.server.Command.*;
 
@@ -18,10 +23,14 @@ public class ClientHandler {
 
     private boolean isAuthenticated = false;
 
-    private String username;
+    private String nickname;
 
-    public String getUsername() {
-        return username;
+    private static long TIME_TO_WAIT_ACTIVITY = 1_200_000L; // 20 минут в миллисекундах;
+
+    private AtomicLong atomicLastActivityTime = new AtomicLong();
+
+    public String getNickname() {
+        return nickname;
     }
 
     public ClientHandler(Socket socket, Server server) throws IOException {
@@ -32,8 +41,30 @@ public class ClientHandler {
         new Thread(() -> {
             try {
                 authenticateUser(server);
+                checkUserActivity();
                 communicateWithUser(server);
             } catch (IOException e) {
+                throw new RuntimeException(e);
+            } finally {
+                disconnect();
+            }
+        }).start();
+    }
+
+    private void checkUserActivity() {
+        new Thread(() -> {
+            try {
+                while (true) {
+                    long lastActivityTime = atomicLastActivityTime.get();
+                    if (System.currentTimeMillis() - lastActivityTime >= TIME_TO_WAIT_ACTIVITY) {
+                        disconnect();
+                        System.out.println("Превышено время ожидания действий от клиента");
+                        break;
+                    }
+                    //System.out.println("Тестовый комментарий для проверки времени ожидания"); /TODO прикрутить логгер
+                    Thread.sleep(10000L);
+                }
+            } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             } finally {
                 disconnect();
@@ -44,8 +75,6 @@ public class ClientHandler {
     private void authenticateUser(Server server) throws IOException {
         while (!isAuthenticated) {
             String message = in.readUTF();
-//            /auth login password /auth admin admin
-//            /register login nick password
             String[] args = message.split(" ");
             String command = args[0];
 
@@ -53,22 +82,22 @@ public class ClientHandler {
                 case AUTH -> {
                     String login = args[1];
                     String password = args[2];
-                    String username = server.getAuthenticationProvider().getUsernameByLoginAndPassword(login, password);
-                    if (username == null || username.isBlank()) {
+                    String nickname = server.getAuthenticationProvider().getNicknameByLoginAndPassword(login, password);
+                    if (nickname == null || nickname.isBlank()) {
                         sendMessage("Указан неверный логин/пароль");
                     } else {
-                        successAuthenticate(username);
+                        successAuthenticate(nickname);
                     }
                 }
                 case REGISTER -> {
                     String login = args[1];
-                    String nick = args[2];
+                    String nickname = args[2];
                     String password = args[3];
-                    boolean isRegistered = server.getAuthenticationProvider().register(login, password, nick);
+                    boolean isRegistered = server.getAuthenticationProvider().register(login, password, nickname);
                     if (!isRegistered) {
                         sendMessage("Указанный логин/никнейм уже заняты");
                     } else {
-                        successAuthenticate(nick);
+                        successAuthenticate(nickname);
                     }
                 }
                 default -> sendMessage("Авторизуйтесь сперва");
@@ -77,18 +106,15 @@ public class ClientHandler {
     }
 
     private void successAuthenticate(String name) {
-        this.username = name;
-        sendMessage(username + ", добро пожаловать в чат!");
+        this.nickname = name;
+        sendMessage(nickname + ", добро пожаловать в чат!");
         server.subscribe(this);
         isAuthenticated = true;
+        atomicLastActivityTime.set(System.currentTimeMillis());
     }
 
     private void communicateWithUser(Server server) throws IOException {
         while (true) {
-            // /exit -> disconnect()
-            // /w user message -> user
-            // /w tom Hello tom
-
             String message = in.readUTF();
             if (message.length() > 0) {
                 String[] splitMessage = message.split(" ");
@@ -99,27 +125,64 @@ public class ClientHandler {
                         //TODO: написать логику
                     }
                     case LIST -> {
-                        List<String> userList = server.getUserList();
-                        String joinedUsers = String.join(", ", userList);
-                        sendMessage(joinedUsers);
+                        long minutesUntilTheEndBan = server.getAuthenticationProvider().getMinutesUntilTheEndBan(nickname);
+                        if (minutesUntilTheEndBan > 0) {
+                            server.sendMessageToUser(Collections.singletonList(nickname), "Вы забанены. Данное действие будет доступно через "
+                                    + minutesUntilTheEndBan + "(минут)");
+                        } else {
+                            List<String> userList = server.getUserList();
+                            String joinedUsers = String.join(", ", userList);
+                            atomicLastActivityTime.set(System.currentTimeMillis());
+                            sendMessage(joinedUsers);
+                        }
                     }
                     case WRITE -> {
-                        if (splitMessage.length > 2) {
-                            String recipient = splitMessage[1];
-                            String messageToUser = convertArrayToString(Arrays.copyOfRange(splitMessage, 2, splitMessage.length));
-                            server.sendMessageToUser(recipient, username + ": " + messageToUser);
+                        long minutesUntilTheEndBan = server.getAuthenticationProvider().getMinutesUntilTheEndBan(nickname);
+                        if (minutesUntilTheEndBan > 0) {
+                            server.sendMessageToUser(Collections.singletonList(nickname), "Вы забанены. Данное действие будет доступно через "
+                                    + minutesUntilTheEndBan + "(минут)");
+                        } else {
+                            if (splitMessage.length > 2) {
+                                String recipient = splitMessage[1];
+                                String messageToUser = convertArrayToString(Arrays.copyOfRange(splitMessage, 2, splitMessage.length));
+                                LocalDateTime now = LocalDateTime.now();
+                                String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                                atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+                                server.sendMessageToUser(Arrays.asList(recipient, nickname), formatNowDateTime + " " + nickname + ": " + messageToUser);
+                            }
                         }
                     }
                     case KICK -> {
-                        if (server.getAuthenticationProvider().isCurrentUserCanKick(username)) {
-                            String usernameForKick = splitMessage[1];
-                            var clientForKick = server.getClientForKick(usernameForKick);
+                        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+                            String nicknameForKick = splitMessage[1];
+                            var clientForKick = server.getClientForKick(nicknameForKick);
                             if (clientForKick != null) {
                                 clientForKick.disconnect();
                             }
                         }
                     }
-                    default -> server.broadcastMessage(username + ": " + message);
+                    case BAN -> {
+                        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+                            String nicknameForBan = splitMessage[1];
+                            long minutesBan = 0L;
+                            if (splitMessage.length > 2) {
+                                minutesBan = Long.parseLong(splitMessage[2]);
+                            }
+                            server.getAuthenticationProvider().banUser(nicknameForBan, minutesBan);
+                        }
+                    }
+                    default -> {
+                        long minutesUntilTheEndBan = server.getAuthenticationProvider().getMinutesUntilTheEndBan(nickname);
+                        if (minutesUntilTheEndBan > 0) {
+                            server.sendMessageToUser(Collections.singletonList(nickname), "Вы забанены. Данное действие будет доступно через "
+                                    + minutesUntilTheEndBan + "(минут)");
+                        } else {
+                            LocalDateTime now = LocalDateTime.now();
+                            String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                            atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+                            server.broadcastMessage(formatNowDateTime + " " + nickname + ": " + message);
+                        }
+                    }
                 }
             }
         }

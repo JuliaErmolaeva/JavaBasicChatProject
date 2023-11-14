@@ -1,9 +1,16 @@
 package ru.project.chat.server;
 
 public interface AuthenticationProvider {
-    String getUsernameByLoginAndPassword(String login, String password);
+    String getNicknameByLoginAndPassword(String login, String password);
 
-    boolean register(String login, String password, String username);
+    boolean register(String login, String password, String nickname);
 
-    boolean isCurrentUserCanKick(String username);
+    // Является ли пользователь администратором
+    boolean isCurrentUserAdmin(String nickname);
+
+    // Забанить пользователя
+    void banUser(String nicknameForBan, long minutesBan);
+
+    // Получение времени до конца бана
+    long getMinutesUntilTheEndBan(String nickname);
 }

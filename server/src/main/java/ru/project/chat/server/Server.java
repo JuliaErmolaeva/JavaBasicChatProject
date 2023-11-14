@@ -23,8 +23,8 @@ public class Server {
 
     public void start() {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
+            System.out.println("Сервер запущен на порту " + port);
             while (true) {
-                System.out.println("Сервер запущен на порту " + port);
                 Socket socket = serverSocket.accept();
                 new ClientHandler(socket, this);
             }
@@ -36,8 +36,8 @@ public class Server {
 
     public synchronized void subscribe(ClientHandler clientHandler) {
         clients.add(clientHandler);
-        if (!"admin".equals(clientHandler.getUsername())) {
-            broadcastMessage("Клиент: " + clientHandler.getUsername() + " вошел в чат");
+        if (!"admin".equals(clientHandler.getNickname())) {
+            broadcastMessage(clientHandler.getNickname() + " вошел в чат");
         }
     }
 
@@ -47,31 +47,33 @@ public class Server {
         }
     }
 
-    public synchronized void sendMessageToUser(String username, String message) {
+    public synchronized void sendMessageToUser(List<String> nicknames, String message) {
         for (ClientHandler client : clients) {
-            if (username.equals(client.getUsername())) {
-                client.sendMessage(message);
+            for (String nickname : nicknames) {
+                if (nickname.equals(client.getNickname())) {
+                    client.sendMessage(message);
+                }
             }
         }
     }
 
     public synchronized void unsubscribe(ClientHandler clientHandler) {
         clients.remove(clientHandler);
-        broadcastMessage("Клиент: " + clientHandler.getUsername() + " вышел из чата");
+        broadcastMessage(clientHandler.getNickname() + " вышел из чата");
     }
 
     // TODO: переделать на concurrentHashMap
     public synchronized List<String> getUserList() {
         var listUsers = new ArrayList<String>();
         for (ClientHandler client : clients) {
-            listUsers.add(client.getUsername());
+            listUsers.add(client.getNickname());
         }
         return listUsers;
     }
 
-    public ClientHandler getClientForKick(String usernameForKick) {
+    public ClientHandler getClientForKick(String nicknameForKick) {
         for (ClientHandler client : clients) {
-            if (usernameForKick.equals(client.getUsername())) {
+            if (nicknameForKick.equals(client.getNickname())) {
                 return client;
                 //unsubscribe(client);
                 // TODO: закрыть все соединения для этого ClientHandler

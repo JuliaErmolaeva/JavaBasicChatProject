@@ -13,4 +13,6 @@ public class Command {
     public static final String WRITE = "/w";
 
     public static final String KICK = "/kick";
+
+    public static final String BAN = "/ban";
 }

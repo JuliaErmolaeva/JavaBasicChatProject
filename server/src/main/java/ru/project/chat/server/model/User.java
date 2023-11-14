@@ -2,6 +2,7 @@ package ru.project.chat.server.model;
 
 import lombok.Setter;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Objects;
@@ -11,16 +12,18 @@ import java.util.Set;
 public class User {
     private String login;
     private String password;
-    private String username;
+    private String nickname;
+    private LocalDateTime startBanDateTime;
+    private LocalDateTime endBanDateTime;
     private Set<Role> roles;
 
     public User() {
     }
 
-    public User(String login, String password, String username, Role role) {
+    public User(String login, String password, String nickname, Role role) {
         this.login = login;
         this.password = password;
-        this.username = username;
+        this.nickname = nickname;
         this.roles = Collections.singleton(role);
     }
 
@@ -32,8 +35,16 @@ public class User {
         return password;
     }
 
-    public String getUsername() {
-        return username;
+    public String getNickname() {
+        return nickname;
+    }
+
+    public LocalDateTime getStartBanDateTime() {
+        return startBanDateTime;
+    }
+
+    public LocalDateTime getEndBanDateTime() {
+        return endBanDateTime;
     }
 
     public Set<Role> getRoles() {
@@ -48,11 +59,11 @@ public class User {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         User user = (User) o;
-        return Objects.equals(login, user.login) && Objects.equals(password, user.password) && Objects.equals(username, user.username);
+        return Objects.equals(login, user.login) && Objects.equals(password, user.password) && Objects.equals(nickname, user.nickname);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(login, password, username);
+        return Objects.hash(login, password, nickname);
     }
 }
