@@ -1,10 +1,13 @@
 package ru.project.chat.client;
 
+import lombok.extern.log4j.Log4j2;
+
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
 
+@Log4j2
 public class Network implements AutoCloseable {
     private Socket socket;
 
@@ -30,9 +33,10 @@ public class Network implements AutoCloseable {
                     }
                 }
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                log.warn("End of file reached");
             } finally {
                 close();
+                callback.closeWindow();
             }
         }).start();
     }
@@ -40,14 +44,14 @@ public class Network implements AutoCloseable {
     @Override
     public void close() {
         try {
-            if (socket != null) {
-                socket.close();
-            }
             if (in != null) {
                 in.close();
             }
             if (out != null) {
                 out.close();
+            }
+            if (socket != null) {
+                socket.close();
             }
         } catch (IOException e) {
             throw new RuntimeException(e);

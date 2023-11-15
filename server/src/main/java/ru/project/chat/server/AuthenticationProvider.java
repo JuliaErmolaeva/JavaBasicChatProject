@@ -13,4 +13,6 @@ public interface AuthenticationProvider {
 
     // Получение времени до конца бана
     long getMinutesUntilTheEndBan(String nickname);
+
+    boolean changeNickname(String oldNickname, String newNickname);
 }

@@ -2,6 +2,8 @@ package ru.project.chat.client;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.IOException;
 
 public class Gui extends JFrame implements Runnable {
@@ -40,7 +42,6 @@ public class Gui extends JFrame implements Runnable {
                 }
         );
 
-        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         setSize(400, 500);
         setVisible(true);
         inTextField.requestFocus();
@@ -50,6 +51,28 @@ public class Gui extends JFrame implements Runnable {
             public void call(Object... args) {
                 outTextArea.append((String) args[0]);
                 outTextArea.append("\n");
+            }
+
+            @Override
+            public void closeWindow() {
+                System.out.println("closing window");
+                network.close();
+                dispose();
+                System.exit(0);
+            }
+        });
+
+        getRootPane().setDefaultButton(inTextSendButton);
+
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                System.out.println("closing window");
+                network.close();
+                dispose();
+                System.exit(0);
             }
         });
     }

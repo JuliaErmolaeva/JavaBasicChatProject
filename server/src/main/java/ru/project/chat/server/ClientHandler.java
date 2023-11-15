@@ -1,7 +1,10 @@
 package ru.project.chat.server;
 
+import lombok.extern.log4j.Log4j2;
+
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.net.Socket;
 import java.time.LocalDateTime;
@@ -14,6 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static ru.project.chat.server.Command.*;
 
+@Log4j2
 public class ClientHandler {
     private Socket socket;
 
@@ -25,13 +29,9 @@ public class ClientHandler {
 
     private String nickname;
 
-    private static long TIME_TO_WAIT_ACTIVITY = 1_200_000L; // 20 минут в миллисекундах;
+    private static long TIME_TO_WAIT_ACTIVITY = 1_200_000L;
 
     private AtomicLong atomicLastActivityTime = new AtomicLong();
-
-    public String getNickname() {
-        return nickname;
-    }
 
     public ClientHandler(Socket socket, Server server) throws IOException {
         this.socket = socket;
@@ -41,10 +41,14 @@ public class ClientHandler {
         new Thread(() -> {
             try {
                 authenticateUser(server);
-                checkUserActivity();
+                if (!server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+                    checkUserActivity();
+                }
                 communicateWithUser(server);
+            } catch (EOFException e) {
+                log.warn("End of file reached");
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                log.warn(e.getMessage());
             } finally {
                 disconnect();
             }
@@ -57,11 +61,10 @@ public class ClientHandler {
                 while (true) {
                     long lastActivityTime = atomicLastActivityTime.get();
                     if (System.currentTimeMillis() - lastActivityTime >= TIME_TO_WAIT_ACTIVITY) {
+                        log.info("Превышено время ожидания действий от клиента " + nickname);
                         disconnect();
-                        System.out.println("Превышено время ожидания действий от клиента");
                         break;
                     }
-                    //System.out.println("Тестовый комментарий для проверки времени ожидания"); /TODO прикрутить логгер
                     Thread.sleep(10000L);
                 }
             } catch (InterruptedException e) {
@@ -120,35 +123,41 @@ public class ClientHandler {
                 String[] splitMessage = message.split(" ");
                 String command = splitMessage[0];
 
+                if (command.equals(EXIT)) {
+                    break;
+                }
+
+                long minutesUntilTheEndBan = server.getAuthenticationProvider().getMinutesUntilTheEndBan(nickname);
+                if (minutesUntilTheEndBan > 0) {
+                    server.sendMessageToUser(Collections.singletonList(nickname), "Вы забанены. Данное действие будет доступно через "
+                            + minutesUntilTheEndBan + "(минут)");
+                    break;
+                }
+
                 switch (command) {
-                    case EXIT -> {
-                        //TODO: написать логику
-                    }
                     case LIST -> {
-                        long minutesUntilTheEndBan = server.getAuthenticationProvider().getMinutesUntilTheEndBan(nickname);
-                        if (minutesUntilTheEndBan > 0) {
-                            server.sendMessageToUser(Collections.singletonList(nickname), "Вы забанены. Данное действие будет доступно через "
-                                    + minutesUntilTheEndBan + "(минут)");
-                        } else {
-                            List<String> userList = server.getUserList();
-                            String joinedUsers = String.join(", ", userList);
-                            atomicLastActivityTime.set(System.currentTimeMillis());
-                            sendMessage(joinedUsers);
-                        }
+                        List<String> userList = server.getUserList();
+                        String joinedUsers = String.join(", ", userList);
+                        atomicLastActivityTime.set(System.currentTimeMillis());
+                        sendMessage(joinedUsers);
                     }
                     case WRITE -> {
-                        long minutesUntilTheEndBan = server.getAuthenticationProvider().getMinutesUntilTheEndBan(nickname);
-                        if (minutesUntilTheEndBan > 0) {
-                            server.sendMessageToUser(Collections.singletonList(nickname), "Вы забанены. Данное действие будет доступно через "
-                                    + minutesUntilTheEndBan + "(минут)");
-                        } else {
-                            if (splitMessage.length > 2) {
-                                String recipient = splitMessage[1];
-                                String messageToUser = convertArrayToString(Arrays.copyOfRange(splitMessage, 2, splitMessage.length));
-                                LocalDateTime now = LocalDateTime.now();
-                                String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                                atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
-                                server.sendMessageToUser(Arrays.asList(recipient, nickname), formatNowDateTime + " " + nickname + ": " + messageToUser);
+                        if (splitMessage.length > 2) {
+                            String recipient = splitMessage[1];
+                            String messageToUser = convertArrayToString(Arrays.copyOfRange(splitMessage, 2, splitMessage.length));
+                            LocalDateTime now = LocalDateTime.now();
+                            String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                            atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+                            server.sendMessageToUser(Arrays.asList(recipient, nickname), formatNowDateTime + " " + nickname + ": " + messageToUser);
+                        }
+                    }
+                    case CHANGE_NICK -> {
+                        if (splitMessage.length == 2) {
+                            String oldNickname = nickname;
+                            String newNickname = splitMessage[1];
+                            boolean successChangeNickname = server.changeNickname(this, newNickname);
+                            if (successChangeNickname) {
+                                server.broadcastMessage("Пользователь с ником " + oldNickname + " сменил ник на " + newNickname);
                             }
                         }
                     }
@@ -171,19 +180,19 @@ public class ClientHandler {
                             server.getAuthenticationProvider().banUser(nicknameForBan, minutesBan);
                         }
                     }
-                    default -> {
-                        long minutesUntilTheEndBan = server.getAuthenticationProvider().getMinutesUntilTheEndBan(nickname);
-                        if (minutesUntilTheEndBan > 0) {
-                            server.sendMessageToUser(Collections.singletonList(nickname), "Вы забанены. Данное действие будет доступно через "
-                                    + minutesUntilTheEndBan + "(минут)");
-                        } else {
-                            LocalDateTime now = LocalDateTime.now();
-                            String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                            atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
-                            server.broadcastMessage(formatNowDateTime + " " + nickname + ": " + message);
+                    case SHUTDOWN -> {
+                        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+                            server.shutdownServer();
                         }
                     }
+                    default -> {
+                        LocalDateTime now = LocalDateTime.now();
+                        String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                        atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+                        server.broadcastMessage(formatNowDateTime + " " + nickname + ": " + message);
+                    }
                 }
+
             }
         }
     }
@@ -198,16 +207,20 @@ public class ClientHandler {
 
     public void disconnect() {
         server.unsubscribe(this);
+        closeResources();
+    }
+
+    public void closeResources() {
         try {
-            if (socket != null) {
-                socket.close();
-            }
             if (in != null) {
                 in.close();
             }
             if (out != null) {
                 out.flush();
                 out.close();
+            }
+            if (socket != null) {
+                socket.close();
             }
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -221,5 +234,13 @@ public class ClientHandler {
             e.printStackTrace();
             disconnect();
         }
+    }
+
+    public String getNickname() {
+        return nickname;
+    }
+
+    public void setNickname(String nickname) {
+        this.nickname = nickname;
     }
 }

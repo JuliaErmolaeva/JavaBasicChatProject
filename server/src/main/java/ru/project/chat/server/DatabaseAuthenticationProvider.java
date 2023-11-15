@@ -1,5 +1,6 @@
 package ru.project.chat.server;
 
+import lombok.extern.log4j.Log4j2;
 import ru.project.chat.server.model.Role;
 import ru.project.chat.server.model.RoleName;
 import ru.project.chat.server.model.User;
@@ -11,6 +12,7 @@ import java.util.*;
 
 import static ru.project.chat.server.model.RoleName.ADMIN;
 
+@Log4j2
 public class DatabaseAuthenticationProvider implements AuthenticationProvider {
 
     // кэш пользователей
@@ -32,6 +34,10 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
 
     private static final String UPDATE_USER_FOR_TEMPORARY_BAN = "UPDATE public.user " +
             "SET start_ban_date_time = ? , end_ban_date_time = ? " +
+            "WHERE nickname = ?";
+
+    private static final String UPDATE_USER_NICKNAME = "UPDATE public.user " +
+            "SET nickname = ? " +
             "WHERE nickname = ?";
 
     public DatabaseAuthenticationProvider() throws SQLException {
@@ -94,7 +100,7 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
             }
             users.add(user);
         }
-        System.out.println("Загрузили кеш пользователей");
+        log.info("Загрузили кеш пользователей");
     }
 
     @Override
@@ -132,7 +138,7 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
                 throw new SQLException("Creating user failed, no rows affected.");
             }
 
-            System.out.println("В таблицу user добавлена " + affectedRows + " запись/записей");
+            log.info("В таблицу user добавлена " + affectedRows + " запись/записей");
 
             currValUserId = getCurrVal(connection);
 
@@ -150,7 +156,7 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
             prepareStatement.setInt(2, role.getId());
 
             int affectedRows = prepareStatement.executeUpdate();
-            System.out.println("В таблицу user_role добавлена " + affectedRows + " запись/записей");
+            log.info("В таблицу user_role добавлена " + affectedRows + " запись/записей");
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
@@ -181,17 +187,14 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
                     if (affectedRows == 0) {
                         throw new SQLException("Updating user failed, no rows affected.");
                     } else {
-                        // TODO: написать какого пользователя
-                        System.out.println("Успешно забанили пользователя");
+                        log.info("Пользователь с ником " + nicknameForBan + " забанен до " + endBanDateTime);
                     }
-                    // TODO: сделать отправку пользователю что его забанили
                 } catch (SQLException e) {
                     throw new RuntimeException(e);
                 }
             }
         }
     }
-
 
     private int updateUserForBan(String nicknameForBan,
                                  LocalDateTime startBanDateTime,
@@ -228,6 +231,39 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
             }
         }
         return false;
+    }
+
+    @Override
+    public boolean changeNickname(String oldNickname, String newNickname) {
+        int affectedRows = 0;
+        for (User user : users) {
+            if (oldNickname.equals(user.getNickname())) {
+                user.setNickname(newNickname);
+
+                try {
+                    affectedRows = updateNickname(oldNickname, newNickname);
+
+                    if (affectedRows == 0) {
+                        throw new SQLException("Updating user failed, no rows affected.");
+                    } else {
+                        log.info("Пользователь с ником " + oldNickname + " сменил ник на " + newNickname);
+                    }
+                } catch (SQLException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+        return affectedRows != 0;
+    }
+
+    private int updateNickname(String oldNickname, String newNickname) throws SQLException {
+        try (Connection connection = ConnectorDB.getConnection();
+             PreparedStatement prepareStatement = connection.prepareStatement(UPDATE_USER_NICKNAME)) {
+            prepareStatement.setString(1, newNickname);
+            prepareStatement.setString(2, oldNickname);
+
+            return prepareStatement.executeUpdate();
+        }
     }
 
     private Integer getCurrVal(Connection connection) {
