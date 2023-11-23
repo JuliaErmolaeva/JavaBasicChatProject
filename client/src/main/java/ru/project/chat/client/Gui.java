@@ -6,16 +6,16 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
 
-public class Gui extends JFrame implements Runnable {
+public class Gui extends JFrame {
 
     protected JTextArea outTextArea;
     protected JPanel southPanel;
     protected JTextField inTextField;
     protected JButton inTextSendButton;
 
-    Network network;
+    private Network network;
 
-    public Gui(String title, Network network) throws HeadlessException {
+    public Gui(String title) throws HeadlessException, IOException {
         super(title);
         southPanel = new JPanel();
         southPanel.setLayout(new GridLayout(2, 1, 10, 10));
@@ -27,8 +27,6 @@ public class Gui extends JFrame implements Runnable {
         cp.add(BorderLayout.CENTER, outTextArea = new JTextArea());
         outTextArea.setEditable(false);
         cp.add(BorderLayout.SOUTH, southPanel);
-
-        this.network = network;
 
         inTextSendButton.addActionListener(event ->
                 {
@@ -42,11 +40,24 @@ public class Gui extends JFrame implements Runnable {
                 }
         );
 
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                System.out.println("closing window");
+                network.close();
+                dispose();
+                System.exit(0);
+            }
+        });
+
+        getRootPane().setDefaultButton(inTextSendButton);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+
         setSize(400, 500);
         setVisible(true);
         inTextField.requestFocus();
-        (new Thread(this)).start();
-        this.network.setCallback(new Callback() {
+
+        this.network = new Network(new Callback() {
             @Override
             public void call(Object... args) {
                 outTextArea.append((String) args[0]);
@@ -61,24 +72,6 @@ public class Gui extends JFrame implements Runnable {
                 System.exit(0);
             }
         });
-
-        getRootPane().setDefaultButton(inTextSendButton);
-
-        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                System.out.println("closing window");
-                network.close();
-                dispose();
-                System.exit(0);
-            }
-        });
-    }
-
-    @Override
-    public void run() {
-
+        network.connect(8080);
     }
 }

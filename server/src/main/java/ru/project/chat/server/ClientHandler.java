@@ -29,7 +29,7 @@ public class ClientHandler {
 
     private String nickname;
 
-    private static long TIME_TO_WAIT_ACTIVITY = 1_200_000L;
+    private static final long TIME_TO_WAIT_ACTIVITY = 1_200_000L; // 20 минут в миллисекундах
 
     private AtomicLong atomicLastActivityTime = new AtomicLong();
 
@@ -40,11 +40,9 @@ public class ClientHandler {
         out = new DataOutputStream(socket.getOutputStream());
         new Thread(() -> {
             try {
-                authenticateUser(server);
-                if (!server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
-                    checkUserActivity();
-                }
-                communicateWithUser(server);
+                authenticateUser();
+                checkUserActivity();
+                communicateWithUser();
             } catch (EOFException e) {
                 log.warn("End of file reached");
             } catch (IOException e) {
@@ -56,55 +54,61 @@ public class ClientHandler {
     }
 
     private void checkUserActivity() {
-        new Thread(() -> {
-            try {
-                while (true) {
-                    long lastActivityTime = atomicLastActivityTime.get();
-                    if (System.currentTimeMillis() - lastActivityTime >= TIME_TO_WAIT_ACTIVITY) {
-                        log.info("Превышено время ожидания действий от клиента " + nickname);
-                        disconnect();
-                        break;
+        if (!server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+            new Thread(() -> {
+                try {
+                    while (true) {
+                        long lastActivityTime = atomicLastActivityTime.get();
+                        if (System.currentTimeMillis() - lastActivityTime >= TIME_TO_WAIT_ACTIVITY) {
+                            log.info("Превышено время ожидания действий от клиента " + nickname);
+                            disconnect();
+                            break;
+                        }
+                        Thread.sleep(10000L);
                     }
-                    Thread.sleep(10000L);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                } finally {
+                    disconnect();
                 }
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            } finally {
-                disconnect();
-            }
-        }).start();
+            }).start();
+        }
     }
 
-    private void authenticateUser(Server server) throws IOException {
+    private void authenticateUser() throws IOException {
         while (!isAuthenticated) {
             String message = in.readUTF();
-            String[] args = message.split(" ");
-            String command = args[0];
+            String[] splitMessage = message.split(" ");
+            String command = splitMessage[0];
 
             switch (command) {
-                case AUTH -> {
-                    String login = args[1];
-                    String password = args[2];
-                    String nickname = server.getAuthenticationProvider().getNicknameByLoginAndPassword(login, password);
-                    if (nickname == null || nickname.isBlank()) {
-                        sendMessage("Указан неверный логин/пароль");
-                    } else {
-                        successAuthenticate(nickname);
-                    }
-                }
-                case REGISTER -> {
-                    String login = args[1];
-                    String nickname = args[2];
-                    String password = args[3];
-                    boolean isRegistered = server.getAuthenticationProvider().register(login, password, nickname);
-                    if (!isRegistered) {
-                        sendMessage("Указанный логин/никнейм уже заняты");
-                    } else {
-                        successAuthenticate(nickname);
-                    }
-                }
+                case AUTH -> executeAuthCommand(splitMessage);
+                case REGISTER -> executeRegisterCommand(splitMessage);
                 default -> sendMessage("Авторизуйтесь сперва");
             }
+        }
+    }
+
+    private void executeAuthCommand(String[] splitMessage) {
+        String login = splitMessage[1];
+        String password = splitMessage[2];
+        String nickname = server.getAuthenticationProvider().getNicknameByLoginAndPassword(login, password);
+        if (nickname == null || nickname.isBlank()) {
+            sendMessage("Указан неверный логин/пароль");
+        } else {
+            successAuthenticate(nickname);
+        }
+    }
+
+    private void executeRegisterCommand(String[] splitMessage) {
+        String login = splitMessage[1];
+        String nickname = splitMessage[2];
+        String password = splitMessage[3];
+        boolean isRegistered = server.getAuthenticationProvider().register(login, password, nickname);
+        if (!isRegistered) {
+            sendMessage("Указанный логин/никнейм уже заняты");
+        } else {
+            successAuthenticate(nickname);
         }
     }
 
@@ -116,7 +120,7 @@ public class ClientHandler {
         atomicLastActivityTime.set(System.currentTimeMillis());
     }
 
-    private void communicateWithUser(Server server) throws IOException {
+    private void communicateWithUser() throws IOException {
         while (true) {
             String message = in.readUTF();
             if (message.length() > 0) {
@@ -135,66 +139,79 @@ public class ClientHandler {
                 }
 
                 switch (command) {
-                    case LIST -> {
-                        List<String> userList = server.getUserList();
-                        String joinedUsers = String.join(", ", userList);
-                        atomicLastActivityTime.set(System.currentTimeMillis());
-                        sendMessage(joinedUsers);
-                    }
-                    case WRITE -> {
-                        if (splitMessage.length > 2) {
-                            String recipient = splitMessage[1];
-                            String messageToUser = convertArrayToString(Arrays.copyOfRange(splitMessage, 2, splitMessage.length));
-                            LocalDateTime now = LocalDateTime.now();
-                            String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                            atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
-                            server.sendMessageToUser(Arrays.asList(recipient, nickname), formatNowDateTime + " " + nickname + ": " + messageToUser);
-                        }
-                    }
-                    case CHANGE_NICK -> {
-                        if (splitMessage.length == 2) {
-                            String oldNickname = nickname;
-                            String newNickname = splitMessage[1];
-                            boolean successChangeNickname = server.changeNickname(this, newNickname);
-                            if (successChangeNickname) {
-                                server.broadcastMessage("Пользователь с ником " + oldNickname + " сменил ник на " + newNickname);
-                            }
-                        }
-                    }
-                    case KICK -> {
-                        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
-                            String nicknameForKick = splitMessage[1];
-                            var clientForKick = server.getClientForKick(nicknameForKick);
-                            if (clientForKick != null) {
-                                clientForKick.disconnect();
-                            }
-                        }
-                    }
-                    case BAN -> {
-                        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
-                            String nicknameForBan = splitMessage[1];
-                            long minutesBan = 0L;
-                            if (splitMessage.length > 2) {
-                                minutesBan = Long.parseLong(splitMessage[2]);
-                            }
-                            server.getAuthenticationProvider().banUser(nicknameForBan, minutesBan);
-                        }
-                    }
-                    case SHUTDOWN -> {
-                        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
-                            server.shutdownServer();
-                        }
-                    }
-                    default -> {
-                        LocalDateTime now = LocalDateTime.now();
-                        String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                        atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
-                        server.broadcastMessage(formatNowDateTime + " " + nickname + ": " + message);
-                    }
+                    case LIST -> executeCommandList();
+                    case WRITE -> executeCommandWrite(splitMessage);
+                    case CHANGE_NICK -> executeCommandChangeNick(splitMessage);
+                    case KICK -> executeCommandKick(splitMessage);
+                    case BAN -> executeCommandBan(splitMessage);
+                    case SHUTDOWN -> executeCommandShutdown();
+                    default -> executeBroadcastMessage(message);
                 }
-
             }
         }
+    }
+
+    private void executeCommandList() {
+        List<String> userList = server.getUserList();
+        String joinedUsers = String.join(", ", userList);
+        atomicLastActivityTime.set(System.currentTimeMillis());
+        sendMessage(joinedUsers);
+    }
+
+    private void executeCommandWrite(String[] splitMessage) {
+        if (splitMessage.length > 2) {
+            String recipient = splitMessage[1];
+            String messageToUser = convertArrayToString(Arrays.copyOfRange(splitMessage, 2, splitMessage.length));
+            LocalDateTime now = LocalDateTime.now();
+            String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+            server.sendMessageToUser(Arrays.asList(recipient, nickname), formatNowDateTime + " " + nickname + ": " + messageToUser);
+        }
+    }
+
+    private void executeCommandChangeNick(String[] splitMessage) {
+        if (splitMessage.length == 2) {
+            String oldNickname = nickname;
+            String newNickname = splitMessage[1];
+            boolean successChangeNickname = server.changeNickname(this, newNickname);
+            if (successChangeNickname) {
+                server.broadcastMessage("Пользователь с ником " + oldNickname + " сменил ник на " + newNickname);
+            }
+        }
+    }
+
+    private void executeCommandKick(String[] splitMessage) {
+        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+            String nicknameForKick = splitMessage[1];
+            var clientForKick = server.getClientForKick(nicknameForKick);
+            if (clientForKick != null) {
+                clientForKick.disconnect();
+            }
+        }
+    }
+
+    private void executeCommandBan(String[] splitMessage) {
+        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+            String nicknameForBan = splitMessage[1];
+            long minutesBan = 0L;
+            if (splitMessage.length > 2) {
+                minutesBan = Long.parseLong(splitMessage[2]);
+            }
+            server.getAuthenticationProvider().banUser(nicknameForBan, minutesBan);
+        }
+    }
+
+    private void executeCommandShutdown() throws IOException {
+        if (server.getAuthenticationProvider().isCurrentUserAdmin(nickname)) {
+            server.shutdownServer();
+        }
+    }
+
+    private void executeBroadcastMessage(String message) {
+        LocalDateTime now = LocalDateTime.now();
+        String formatNowDateTime = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        atomicLastActivityTime.set(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+        server.broadcastMessage(formatNowDateTime + " " + nickname + ": " + message);
     }
 
     private String convertArrayToString(String[] strings) {

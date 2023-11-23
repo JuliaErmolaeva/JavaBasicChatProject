@@ -16,7 +16,7 @@ public class Network implements AutoCloseable {
 
     private Callback callback;
 
-    public void setCallback(Callback callback) {
+    public Network(Callback callback) {
         this.callback = callback;
     }
 
